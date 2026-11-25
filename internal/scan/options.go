@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/assetnote/kiterunner/pkg/kitebuilder"
 	"github.com/assetnote/kiterunner/pkg/kiterunner"
 	"github.com/assetnote/kiterunner/pkg/log"
+	"github.com/assetnote/kiterunner/pkg/openapi"
 	"github.com/assetnote/kiterunner/pkg/proute"
 	"github.com/hashicorp/go-multierror"
 )
@@ -62,6 +64,7 @@ type ScanOptions struct {
 	dirsearchCompatabilityMode bool
 	kitebuilderAPINames        []string
 	assetnoteAPINames          []string
+	openapiNames               []string
 	wordlistNames              []string
 
 	// interim struct for conversion
@@ -69,6 +72,10 @@ type ScanOptions struct {
 
 	// actual routes that we'll be scanning prior to conversion to Routes
 	prouteAPIs []proute.API
+
+	openapiReports      []openapi.CoverageReport
+	printOpenAPIReports bool
+	openAPIReportFile   string
 }
 
 func (s ScanOptions) KiterunnerOptions() []kiterunner.ConfigOption {
@@ -106,6 +113,7 @@ func (s ScanOptions) String() string {
 		"ForceMethod":              s.ForceMethod,
 		"ShowProgress":             s.ShowProgress,
 		"KitebuilderAPIs":          len(s.kitebuilderAPIs),
+		"OpenAPISpecs":             s.openapiNames,
 		"KitebuilderFullScan":      s.KitebuilderFullScan,
 		"SuccessStatusCodes":       convert.IntMapToSlice(s.SuccessStatusCodes),
 		"FailStatusCodes":          convert.IntMapToSlice(s.FailStatusCodes),
@@ -306,9 +314,9 @@ func LoadTextWordlist(fns []string, extensions []string, dirsearchCompatabilityM
 
 				// do all the extensions
 				for _, ext := range extensions {
-					path := []byte( v )
+					path := []byte(v)
 					if dirsearchCompatabilityMode {
-						path = bytes.Replace(path, []byte("%EXT%"), []byte( ext ), -1)
+						path = bytes.Replace(path, []byte("%EXT%"), []byte(ext), -1)
 					} else {
 						path = append(path, "."...)
 						path = append(path, ext...)
@@ -365,12 +373,12 @@ func LoadAssetnoteWordlist(fns []string, extensions []string, dirsearchCompatabi
 				if vv[0] != '/' {
 					vv = "/" + vv
 				}
-				o.Routes = append(o.Routes, &http.Route{Method: http.GET, Path: []byte( vv )})
+				o.Routes = append(o.Routes, &http.Route{Method: http.GET, Path: []byte(vv)})
 
 				for _, ext := range extensions {
-					path := []byte( vv )
+					path := []byte(vv)
 					if dirsearchCompatabilityMode {
-						path = bytes.Replace(path, []byte("%EXT%"), []byte( ext ), -1)
+						path = bytes.Replace(path, []byte("%EXT%"), []byte(ext), -1)
 					} else {
 						path = append(path, "."...)
 						path = append(path, ext...)
@@ -438,6 +446,36 @@ func LoadAssetnoteWordlistKitebuilder(fns []string) ScanOption {
 	}
 }
 
+func appendProuteAPI(o *ScanOptions, api proute.API, source string) error {
+	var merr *multierror.Error
+
+	o.prouteAPIs = append(o.prouteAPIs, api)
+	routes, err := proute.ToKiterunnerRoutes(api)
+	if errors.As(err, &merr) {
+		log.Error().Str("id", api.ID).Str("source", source).Msg("errors while parsing api")
+		for _, v := range merr.Errors {
+			errors2.PrintError(v, 0)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to parse api: %w", err)
+	}
+	o.Routes = append(o.Routes, routes...)
+	return nil
+}
+
+func appendProuteAPIs(o *ScanOptions, apis proute.APIS, source string) error {
+	for _, api := range apis {
+		if err := appendProuteAPI(o, api, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadKitebuilderFile loads kiterunner .kite files, raw kitebuilder JSON, and
+// OpenAPI/Swagger JSON or YAML specs. Auto-detection here keeps every existing
+// scan mode (quick scan, full scan, filters and progress reporting) working for
+// spec-driven routes.
 func LoadKitebuilderFile(fns []string) ScanOption {
 	return func(o *ScanOptions) error {
 		for _, filename := range fns {
@@ -445,35 +483,119 @@ func LoadKitebuilderFile(fns []string) ScanOption {
 				return nil
 			}
 
-			var merr *multierror.Error
-			apis, err := proute.DecodeAPIProtoFile(filename)
-			if err != nil {
-				return fmt.Errorf("failed to decode kite file: %w", err)
-			}
-			o.prouteAPIs = append(o.prouteAPIs, apis...)
+			if strings.HasSuffix(strings.ToLower(filename), ".kite") {
+				apis, err := proute.DecodeAPIProtoFile(filename)
+				if err != nil {
+					return fmt.Errorf("failed to decode kite file: %w", err)
+				}
 
-			for _, v := range apis {
-				wcr, err := proute.ToKiterunnerRoutes(v)
+				if err := appendProuteAPIs(o, apis, filename); err != nil {
+					return err
+				}
+				o.kitebuilderAPINames = append(o.kitebuilderAPINames, filename)
+				continue
+			}
+
+			data, err := ioutil.ReadFile(filename)
+			if err != nil {
+				return fmt.Errorf("failed to read wordlist %s: %w", filename, err)
+			}
+
+			if openapi.IsOpenAPI(data) {
+				doc, err := openapi.LoadBytes(data, filename)
+				if err != nil {
+					return fmt.Errorf("failed to parse OpenAPI spec %s: %w", filename, err)
+				}
+				if err := appendProuteAPI(o, doc.API, filename); err != nil {
+					return err
+				}
+				o.openapiNames = append(o.openapiNames, filename)
+				o.openapiReports = append(o.openapiReports, doc.CoverageReport())
+				continue
+			}
+
+			// Backwards-compatible support for the pre-compiled JSON schema.
+			apis, err := kitebuilder.SlowLoadJSONBytes(data)
+			if err != nil {
+				var merr *multierror.Error
 				if errors.As(err, &merr) {
-					log.Error().Str("id", v.ID).Msg("errors while parsing api")
 					for _, v := range merr.Errors {
 						errors2.PrintError(v, 0)
 					}
-				} else if err != nil {
-					return fmt.Errorf("failed to parse api: %w", err)
+				} else {
+					return fmt.Errorf("failed to parse %s as kite or OpenAPI document: %w", filename, err)
 				}
-
-				o.Routes = append(o.Routes, wcr...)
 			}
 
+			proutes, err := proute.FromKitebuilderAPIs(apis)
+			if err != nil {
+				var merr *multierror.Error
+				if errors.As(err, &merr) {
+					for _, v := range merr.Errors {
+						errors2.PrintError(v, 0)
+					}
+				} else {
+					return fmt.Errorf("failed to convert kitebuilder schema %s: %w", filename, err)
+				}
+			}
+			if err := appendProuteAPIs(o, proute.APIS(proutes), filename); err != nil {
+				return err
+			}
 			o.kitebuilderAPINames = append(o.kitebuilderAPINames, filename)
-
-			// clear it so we can garbage collect it
-			apis = proute.APIS{}
 		}
 
 		return nil
 	}
+}
+
+// LoadOpenAPIFile explicitly loads OpenAPI/Swagger spec files. It is
+// equivalent to passing the same files to LoadKitebuilderFile, but gives a
+// clear error if a file is not a spec.
+func LoadOpenAPIFile(fns []string) ScanOption {
+	return func(o *ScanOptions) error {
+		for _, filename := range fns {
+			if filename == "" {
+				continue
+			}
+			doc, err := openapi.LoadFile(filename)
+			if err != nil {
+				return fmt.Errorf("failed to load OpenAPI spec %s: %w", filename, err)
+			}
+			if err := appendProuteAPI(o, doc.API, filename); err != nil {
+				return err
+			}
+			o.openapiNames = append(o.openapiNames, filename)
+			o.openapiReports = append(o.openapiReports, doc.CoverageReport())
+		}
+		return nil
+	}
+}
+
+// OpenAPICoverageReport controls whether coverage reports are printed during a
+// scan and optionally written to a JSON file.
+func OpenAPICoverageReport(print bool, filename string) ScanOption {
+	return func(o *ScanOptions) error {
+		o.printOpenAPIReports = print
+		o.openAPIReportFile = filename
+		return nil
+	}
+}
+
+func (s ScanOptions) writeOpenAPIReports() error {
+	if len(s.openapiReports) == 0 {
+		return nil
+	}
+	if s.openAPIReportFile != "" {
+		if err := openapi.WriteReportFile(s.openAPIReportFile, s.openapiReports, "json"); err != nil {
+			return fmt.Errorf("failed to write OpenAPI coverage report: %w", err)
+		}
+	}
+	if s.printOpenAPIReports {
+		if err := openapi.WriteReports(os.Stderr, s.openapiReports, "text"); err != nil {
+			return fmt.Errorf("failed to print OpenAPI coverage report: %w", err)
+		}
+	}
+	return nil
 }
 
 // FilterAPIs will modify the output of FilteredRoutes to return the routes that only match the apis set

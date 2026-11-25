@@ -62,6 +62,9 @@ func ScanDomainOrFile(ctx context.Context, domainOrFile string, opts ...ScanOpti
 			return fmt.Errorf("failed to apply option: %w", err)
 		}
 	}
+	if err := s.writeOpenAPIReports(); err != nil {
+		return err
+	}
 	log.Debug().Msgf("Options loaded: \n%s", s)
 
 	// only scan what we want to scan
@@ -121,6 +124,9 @@ func ScanDomainOrFile(ctx context.Context, domainOrFile string, opts ...ScanOpti
 		}
 		if len(s.kitebuilderAPINames) > 0 {
 			fields["kitebuilder-apis"] = s.kitebuilderAPINames
+		}
+		if len(s.openapiNames) > 0 {
+			fields["openapi-specs"] = s.openapiNames
 		}
 		if len(s.wordlistNames) > 0 {
 			fields["wordlists"] = s.wordlistNames
@@ -275,6 +281,9 @@ func ScanStdin(ctx context.Context, opts ...ScanOption) error {
 		if err := o(s); err != nil {
 			return fmt.Errorf("failed to apply option: %w", err)
 		}
+	}
+	if err := s.writeOpenAPIReports(); err != nil {
+		return err
 	}
 	log.Debug().Msgf("Options loaded: %+v", s)
 	routeSlice := s.FilteredRoutes()

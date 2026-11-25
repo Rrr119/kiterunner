@@ -35,6 +35,7 @@ Swagger files were collected from a number of datasources, including an internet
   * [CLI Help](#cli-help)
   * [Input/Host Formatting](#inputhost-formatting)
   * [API Scanning](#api-scanning)
+  * [OpenAPI / Swagger Specs](#openapi--swagger-specs)
   * [Vanilla Bruteforcing](#vanilla-bruteforcing)
   * [Dirsearch Bruteforcing](#dirsearch-bruteforcing)
 * [Technical Features](#technical-features)
@@ -215,6 +216,31 @@ kr scan target.com -w routes.kite -A=apiroutes-210228:20000 -x 10 --ignore-lengt
 # a list of targets
 kr scan targets.txt -w routes.kite -A=apiroutes-210228:20000 -x 10 --ignore-length=34
 ```
+
+## OpenAPI / Swagger Specs
+
+Kiterunner can generate routes directly from Swagger 2.0 and OpenAPI 3.x specs
+in JSON or YAML. Local `$ref`s, `basePath`/`servers`, path/query/header
+parameters, request bodies and security schemes are converted into the same
+`proute` representation used by `.kite` wordlists.
+
+```bash
+# Auto-detected when passed to -w
+kr scan target.com -w openapi.yaml -x 10 -j 5
+
+# Explicit flag plus a coverage report
+kr scan target.com --openapi openapi.json --openapi-report
+
+# Compile a spec into a normal .kite wordlist
+kr kb compile openapi.yaml routes.kite
+
+# Compare generated routes with a manually enumerated baseline
+kr kb openapi-report openapi.yaml --manual manual.routes.txt
+```
+
+`kr kb openapi-report` supports multiple specs and `--json`/`--output` for CI.
+See [docs/openapi.md](docs/openapi.md) for the verification baseline and
+coverage numbers.
 
 ## Vanilla Bruteforcing 
 

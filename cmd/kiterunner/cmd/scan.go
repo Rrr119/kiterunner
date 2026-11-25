@@ -16,6 +16,9 @@ import (
 var (
 	kitebuilderFiles    = []string{}
 	kitebuilderFullScan = false
+	openapiFiles        = []string{}
+	openapiCoverage     = false
+	openapiCoverageFile = ""
 	headers             = []string{}
 
 	failStatusCodes    = []int{}
@@ -58,7 +61,9 @@ If the port is missing, then we will try both http:80 and https:443
 
 The kitebuilder file format is a modified openAPI schema that allows you to specify
 arguments, parameters, headers, methods and body structure for structured api calls.
-We can load an kitebuilder file in as the wordlist. 
+We can load a kitebuilder file in as the wordlist.
+OpenAPI 2/3 specs (JSON or YAML) are auto-detected and converted to the same
+route format, so they work with both the quick and full scan modes.
 By default, we perform a 2 phase kitebuilder scan. The first phase uses a single route for api schema.
 If any of the routes respond, we perform a second phase scan on the host where all the routes for an api
 are scanned
@@ -83,6 +88,8 @@ kr scan domains.txt -W rafter.txt -D=0 # this just uses the words as a normal wo
 			scan.Delay(delay),
 			scan.AddHeaders(headers),
 			scan.LoadKitebuilderFile(kitebuilderFiles),
+			scan.LoadOpenAPIFile(openapiFiles),
+			scan.OpenAPICoverageReport(openapiCoverage, openapiCoverageFile),
 			scan.KitebuilderFullScan(kitebuilderFullScan),
 			scan.LoadAssetnoteWordlistKitebuilder(assetnoteWordlist),
 			scan.ForceMethod(forceMethod),
@@ -127,7 +134,10 @@ kr scan domains.txt -W rafter.txt -D=0 # this just uses the words as a normal wo
 func init() {
 	rootCmd.AddCommand(scanCmd)
 
-	scanCmd.Flags().StringSliceVarP(&kitebuilderFiles, "kitebuilder-list", "w", kitebuilderFiles, "ogl wordlist to use for scanning")
+	scanCmd.Flags().StringSliceVarP(&kitebuilderFiles, "kitebuilder-list", "w", kitebuilderFiles, "kitebuilder/OpenAPI wordlist or spec to use for scanning")
+	scanCmd.Flags().StringSliceVar(&openapiFiles, "openapi", openapiFiles, "OpenAPI/Swagger spec files to generate routes from (JSON or YAML)")
+	scanCmd.Flags().BoolVar(&openapiCoverage, "openapi-report", openapiCoverage, "print an OpenAPI route coverage report during the scan")
+	scanCmd.Flags().StringVar(&openapiCoverageFile, "openapi-report-file", openapiCoverageFile, "write OpenAPI route coverage reports as JSON to this file")
 	scanCmd.Flags().BoolVar(&kitebuilderFullScan, "kitebuilder-full-scan", kitebuilderFullScan, "perform a full scan without first performing a phase scan.")
 	scanCmd.Flags().StringSliceVarP(&headers, "header", "H", []string{"x-forwarded-for: 127.0.0.1"}, "headers to add to requests")
 

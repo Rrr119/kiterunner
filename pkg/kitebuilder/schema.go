@@ -1,6 +1,7 @@
 package kitebuilder
 
 import (
+	"encoding/json"
 	"reflect"
 )
 
@@ -43,6 +44,35 @@ type Operation struct {
 	Parameters  []Parameter   `json:"parameter,omitempty"`
 	Consumes    []ContentType `json:"consume,omitempty"`
 	Produces    []ContentType `json:"produce,omitempty"`
+}
+
+// UnmarshalJSON accepts both the legacy singular kitebuilder field names and
+// the plural Swagger/OpenAPI names. The latter is what most schema producers
+// emit, while marshal output remains backwards compatible.
+func (o *Operation) UnmarshalJSON(data []byte) error {
+	type operationAlias Operation
+	aux := struct {
+		*operationAlias
+		Parameters []Parameter   `json:"parameters"`
+		Consumes   []ContentType `json:"consumes"`
+		Produces   []ContentType `json:"produces"`
+	}{
+		operationAlias: (*operationAlias)(o),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Parameters != nil {
+		o.Parameters = aux.Parameters
+	}
+	if aux.Consumes != nil {
+		o.Consumes = aux.Consumes
+	}
+	if aux.Produces != nil {
+		o.Produces = aux.Produces
+	}
+	return nil
 }
 
 // Typer provides an interface that makes parameter and schema generic. It provides a list of fields

@@ -3,6 +3,7 @@ package proute
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -97,7 +98,14 @@ func objectCrumbFromSchema(name string, v kitebuilder.Typer) (Crumb, error) {
 			ret.Elements = append(ret.Elements, c)
 		}
 
-		for k, vv := range v.GetProperties() {
+		properties := v.GetProperties()
+		propertyNames := make([]string, 0, len(properties))
+		for k := range properties {
+			propertyNames = append(propertyNames, k)
+		}
+		sort.Strings(propertyNames)
+		for _, k := range propertyNames {
+			vv := properties[k]
 			c, err := objectCrumbFromSchema(k, &vv)
 			if err != nil {
 				return ret, &errors.ParserError{
@@ -249,7 +257,7 @@ func objectCrumbFromSchema(name string, v kitebuilder.Typer) (Crumb, error) {
 					Err:     fmt.Errorf("failed to compile pattern: %w", err),
 				})
 			}
-			return ret, merr
+			return ret, merr.ErrorOrNil()
 		} else if v.GetDefault() != nil { // if there's a default, lets just take that and stop thinking
 			if vv, ok := v.GetDefault().(string); ok {
 				return StaticCrumb{K: name, V: vv}, nil
@@ -260,7 +268,7 @@ func objectCrumbFromSchema(name string, v kitebuilder.Typer) (Crumb, error) {
 				Context: fmt.Sprintf("%s.Default", name),
 				Err:     fmt.Errorf("unexpected default type: %v", v.GetDefault()),
 			})
-			return RandomStringCrumb{Name: name}, merr
+			return RandomStringCrumb{Name: name}, merr.ErrorOrNil()
 		} else {
 			f := strings.TrimSpace(strings.ToLower(v.GetFormat()))
 			switch f {
@@ -579,7 +587,7 @@ func CrumbToSchema(c Crumb) kitebuilder.Schema {
 			p.Properties[v.Key()] = CrumbToSchema(v)
 		}
 	case ArrayCrumb:
-		p.Type = "Array"
+		p.Type = "array"
 		tmp := CrumbToSchema(c.(ArrayCrumb).Element)
 		p.Items = &tmp
 	case StringCrumbCrumb:
@@ -633,7 +641,7 @@ func CrumbToParameter(c Crumb) kitebuilder.Parameter {
 		tmp := CrumbToSchema(c)
 		p.Schema = &tmp
 	case ArrayCrumb:
-		p.Type = "Array"
+		p.Type = "array"
 		tmp := CrumbToSchema(c)
 		p.Items = &tmp
 	case StringCrumbCrumb:

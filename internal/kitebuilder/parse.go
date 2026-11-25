@@ -10,8 +10,9 @@ import (
 	"strings"
 
 	errors2 "github.com/assetnote/kiterunner/pkg/errors"
-	"github.com/assetnote/kiterunner/pkg/log"
 	"github.com/assetnote/kiterunner/pkg/kitebuilder"
+	"github.com/assetnote/kiterunner/pkg/log"
+	"github.com/assetnote/kiterunner/pkg/openapi"
 	"github.com/assetnote/kiterunner/pkg/proute"
 	"github.com/hashicorp/go-multierror"
 )
@@ -71,6 +72,17 @@ func Compile(ctx context.Context, r io.Reader, outputFile string, opts ...ScanOp
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
+	if openapi.IsOpenAPI(data) {
+		doc, err := openapi.LoadBytes(data, "openapi")
+		if err != nil {
+			return fmt.Errorf("failed to parse OpenAPI spec: %w", err)
+		}
+		if err := (proute.APIS{doc.API}).EncodeProtoFile(outputFile); err != nil {
+			return fmt.Errorf("failed to encode apis: %w", err)
+		}
+		return nil
+	}
+
 	var merr *multierror.Error
 	api, err := kitebuilder.SlowLoadJSONBytes(data)
 	if errors.As(err, &merr) {
@@ -119,6 +131,10 @@ func DebugPrintReader(ctx context.Context, r io.Reader, opts ...ScanOption) erro
 func DebugPrintBytes(data []byte) error {
 	log.Debug().Msg("debug printing")
 
+	if openapi.IsOpenAPI(data) {
+		return printOpenAPIReport(data)
+	}
+
 	var merr *multierror.Error
 	api, err := kitebuilder.SlowLoadJSONBytes(data)
 	if errors.As(err, &merr) {
@@ -163,11 +179,29 @@ func DebugPrintBytes(data []byte) error {
 }
 
 func PrintBytes(data []byte) error {
+	if openapi.IsOpenAPI(data) {
+		return printOpenAPIReport(data)
+	}
+
 	api, err := kitebuilder.LoadJSONBytes(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse json: %w", err)
 	}
 
 	kitebuilder.PrintAPIs(api)
+	return nil
+}
+
+func printOpenAPIReport(data []byte) error {
+	doc, err := openapi.LoadBytes(data, "<input>")
+	if err != nil {
+		return fmt.Errorf("failed to parse OpenAPI spec: %w", err)
+	}
+	if err := doc.CoverageReport().WriteText(os.Stdout); err != nil {
+		return err
+	}
+	for _, operation := range doc.Operations {
+		fmt.Fprintf(os.Stdout, "  %s\n", operation.Key())
+	}
 	return nil
 }
